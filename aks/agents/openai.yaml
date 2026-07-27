@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy Phase on Azure AKS"
+  short_description: "Plan and deploy Phase safely on AKS"
+  default_prompt: "Use $aks to interview me, plan the architecture, and deploy Phase on Azure AKS through validation."

@@ -23,6 +23,7 @@ Then ask your AI agent: **"deploy Phase with Docker Compose"**
 | `docker-compose` | Deploy Phase Console with Docker Compose and Let's Encrypt TLS | "deploy Phase with Docker Compose" |
 | `k8s` | Deploy Phase Console on any Kubernetes cluster via Helm | "deploy Phase on Kubernetes" |
 | `eks` | Deploy Phase Console on AWS EKS with Helm and native AWS services | "deploy Phase on EKS" |
+| `aks` | Deploy Phase Console on Azure AKS with Azure-native services and optional Tailscale networking | "deploy Phase on AKS" |
 
 ## How it works
 
