@@ -22,8 +22,12 @@ Use this reference to discover the current chart, generate secrets and minimal v
 - Published repository: https://helm.phase.dev
 - Chart source and values: https://github.com/phasehq/kubernetes-secrets-operator/tree/main/phase-console
 - Self-hosting configuration: https://docs.phase.dev/self-hosting/configuration/envars
+- OAuth SSO: https://docs.phase.dev/access-control/authentication/oauth-sso
+- Organisation SSO: https://docs.phase.dev/access-control/authentication/sso
+- Platform integrations: https://docs.phase.dev/integrations/platforms
 
 Treat the published chart selected for the deployment as authoritative. The observations labeled `1.0.2` below explain a tested release and must be revalidated for later versions.
+For SSO or third-party integrations, re-open both Phase's page and the provider's official page so callback URLs and scopes match the final hostname and current release. Use a documented `.md` page or `Accept: text/markdown` when the docs site supports it; otherwise use the rendered page. Never guess these values.
 
 ## Discover and pin
 

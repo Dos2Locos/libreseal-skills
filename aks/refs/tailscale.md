@@ -5,6 +5,7 @@ Use this reference only when the user selects Tailscale. Treat tailnet policy, K
 ## Contents
 
 - [Current official references](#current-official-references)
+- [Admin-console handoffs](#admin-console-handoffs)
 - [Architecture](#architecture)
 - [Choose standalone or ProxyGroup](#choose-standalone-or-proxygroup)
 - [Tailnet policy](#tailnet-policy)
@@ -23,13 +24,28 @@ Use this reference only when the user selects Tailscale. Treat tailnet policy, K
 - Ingress and HA: https://tailscale.com/docs/kubernetes-operator/ingress
 - Funnel from Kubernetes: https://tailscale.com/docs/kubernetes-operator/ingress/expose-workload-to-internet
 - Egress and HA: https://tailscale.com/docs/kubernetes-operator/egress
+- In-cluster MagicDNS for HTTPS egress: https://tailscale.com/docs/kubernetes-operator/egress/enable-magicdns-resolution
 - ProxyGroup: https://tailscale.com/docs/kubernetes-operator/concepts/proxygroup
 - ProxyGroup namespace policy: https://tailscale.com/docs/kubernetes-operator/manage-and-configure/proxy-group-policy
 - Operator permissions/RBAC: https://tailscale.com/docs/kubernetes-operator/reference/rbac
 - Workload identity federation: https://tailscale.com/docs/kubernetes-operator/manage-and-configure/workload-identity-federation
 - Operator limitations: https://tailscale.com/docs/kubernetes-operator/reference/limitations
+- AKS CoreDNS customization: https://learn.microsoft.com/azure/aks/coredns-custom
+- CoreDNS rewrite syntax: https://coredns.io/plugins/rewrite/
 
 Re-open these and inspect the selected operator chart/CRDs. Tailscale capabilities have evolved materially between releases.
+
+## Admin-console handoffs
+
+Use direct links and the **Why / Open / Do / Confirm** handoff format:
+
+| Need | Open | Do | Confirm |
+|---|---|---|---|
+| Tailnet tags, grants, or Funnel permission | [Access controls](https://console.tailscale.com/admin/acls) | Open the JSON editor, preserve the existing policy, and merge only the generated sections. A default policy may already contain `grants` or `acls`, `ssh`, and a `nodeAttrs` rule for `autogroup:member`. | The editor validates and saves without replacing unrelated rules. |
+| Operator OAuth credential | [Trust credentials](https://console.tailscale.com/admin/settings/trust-credentials) | Select **Credential → OAuth**, add the exact scopes in the table below, and select `tag:k8s-operator`. | The user stores the one-time secret locally and confirms the Kubernetes Secret was created; they do not paste it into chat. |
+| Operator/proxy device inspection | [Machines](https://console.tailscale.com/admin/machines) | Filter **Managed by** for `tag:k8s-operator` or the selected proxy tag. | The expected operator and proxy devices are connected and carry the intended tags. |
+
+Explain that policy authorizes tags, traffic, and Funnel; OAuth lets the operator create and maintain the corresponding devices and Services. They are separate controls.
 
 ## Architecture
 
@@ -50,7 +66,7 @@ each Phase backend/worker replica
   -> target-node.tail123abc.ts.net:8443
 ```
 
-Normal AKS pods do not automatically get MagicDNS or unrestricted tailnet routes merely because the operator is installed. Create one annotated Kubernetes Service per intended tailnet destination, or deliberately configure the operator's DNS feature after reviewing its blast radius.
+Normal AKS pods do not automatically get MagicDNS or unrestricted tailnet routes merely because the operator is installed. Create one annotated Kubernetes Service per intended tailnet destination. For HTTPS, keep the MagicDNS hostname as the application URL and deliberately route its DNS to that Service as described below.
 
 The tailnet leg is encrypted by Tailscale/WireGuard. Pod-to-proxy and target-daemon-to-local-service traffic may still be plaintext; use HTTPS or mTLS for end-to-end application encryption.
 
@@ -64,7 +80,12 @@ For Funnel, do not assume a ProxyGroup annotation makes the public path HA. The 
 
 ## Tailnet policy
 
-Merge objects into the existing policy; never replace the whole policy. If the session cannot edit tailnet policy, print a valid JSON/HuJSON merge fragment, identify the exact existing arrays/maps it affects, and wait for a tailnet administrator to apply and validate it.
+Merge objects into the existing policy; never replace the whole policy.
+
+- If the user supplies the current policy, return a complete merged JSON/HuJSON document and a short list of changed maps/arrays. Preserve comments, `ssh`, existing `acls` or `grants`, auto-approvers, and unrelated tags. Offer to do the merge; do not pressure the user.
+- If the current policy is unavailable, return a syntactically valid merge fragment with exact insertion points and name each affected section.
+- Tell the administrator why each addition is needed, link [Access controls](https://console.tailscale.com/admin/acls), mention the default rules they may already see, and ask them to confirm that the editor validates and saves.
+- Do not invent a new policy style merely to modernize an existing file. Legacy `acls` and newer `grants` may coexist when valid.
 
 ### Standalone proxy tags
 
@@ -110,11 +131,15 @@ On a shared cluster, consider `ProxyGroupPolicy` so only approved namespaces can
 
 ### OAuth client
 
-In **Trust credentials**, create a client tagged `tag:k8s-operator` with read/write access for:
+Open [Trust credentials](https://console.tailscale.com/admin/settings/trust-credentials), select **Credential → OAuth**, and create a client tagged `tag:k8s-operator`:
 
-- General / Services
-- Devices / Core
-- Keys / Auth Keys
+| Console category | Select | Why the operator needs it |
+|---|---|---|
+| General → Services | Read and Write | Advertise and maintain Tailscale Services. |
+| Devices → Core | Read and Write | Create, authorize, tag, and reconcile operator-managed devices. |
+| Keys → Auth Keys | Read and Write | Mint tagged auth keys for managed proxies. |
+
+Current install documentation describes the resulting API scopes as write scopes; the current quickstart shows both UI boxes selected. Re-open the install guide and follow the live UI if these labels change. If `tag:k8s-operator` is absent, apply the `tagOwners` policy first. The credential creator needs an appropriate tailnet administrator role.
 
 The operator exchanges this client credential for short-lived API tokens, but the OAuth client secret itself remains a stored credential. Have the user create the Kubernetes Secret locally:
 
@@ -270,27 +295,34 @@ certManager:
 
 ### Real client IP through Tailscale and NGINX
 
-Discover the live pod CIDR:
+Map the source NGINX currently sees before changing trust:
 
 ```bash
-az aks show --resource-group <resource-group> --name <cluster> \
-  --query networkProfile.podCidr -o tsv
+kubectl get pods -A -o wide | rg '<recorded-10.x-address>'
 ```
 
-For the tested Tailscale-to-NGINX path, add to the Phase Ingress values:
+Tailscale replaces inbound `X-Forwarded-For` with the source it observes. NGINX must trust the Tailscale proxy boundary before it will use that canonical address.
+
+Choose the narrowest maintainable boundary:
+
+| Boundary | Tradeoff |
+|---|---|
+| Current standalone proxy pod `/32` | Narrowest quick fix, but must be refreshed if the pod is recreated with another IP. |
+| Dedicated proxy subnet/range plus NetworkPolicy | Preferred durable boundary when the cluster design supports it. |
+| Full AKS pod CIDR plus NetworkPolicy | Operationally easy, but spoofable by any pod that can reach NGINX unless policy prevents it. |
+
+For a standalone proxy `/32`, add to the Phase Ingress values:
 
 ```yaml
 ingress:
   annotations:
     nginx.ingress.kubernetes.io/configuration-snippet: |
-      set_real_ip_from <exact-aks-pod-cidr>;
+      set_real_ip_from <current-tailscale-proxy-pod-ip>/32;
       real_ip_header X-Forwarded-For;
       real_ip_recursive on;
 ```
 
-Tailscale replaces inbound `X-Forwarded-For` with the source it observes. NGINX must trust only the actual proxy source boundary or it records the proxy pod IP.
-
-Never use `0.0.0.0/0`. Trusting the entire pod CIDR permits any pod that can reach NGINX to forge the header. Enforce NetworkPolicy or use a narrower dedicated proxy boundary before treating the result as a production security control.
+Inspect rendered NGINX configuration to prove the annotation took effect. Never use `0.0.0.0/0`. If the chosen trust source is ephemeral, record the refresh/monitoring obligation in the handoff.
 
 Validate new events:
 
@@ -301,6 +333,15 @@ Validate new events:
 ## Funnel
 
 Funnel on the main bridge publishes the complete Phase hostname to the internet. Prefer the existing bridge only when full-host public exposure is approved; private and public callers then use the same `.ts.net` hostname and Phase host/origin/cookie configuration does not change.
+
+Track the selection explicitly:
+
+1. `selected`: the user chose Funnel and accepted whole-host or reviewed path exposure.
+2. `deferred`: private authentication and unauthenticated-denial tests are still pending.
+3. `enabled`: policy contains the proxy-tag `funnel` attribute and the Ingress is annotated.
+4. `verified`: outside-tailnet TLS, health, authentication, client IP, and rollback all pass.
+
+Do not report a Tailscale deployment complete at the private stage when Funnel was selected. If the user chooses to stop there, record Funnel as explicitly deferred.
 
 If only SCIM, webhook, or selected public API paths may be exposed, do not annotate the main bridge. First verify the selected Phase version supports a separate public hostname in allowed hosts/origins and that every required endpoint works without exposing UI or unrelated API routes. Then create a dedicated Funnel Ingress with only the reviewed routes. If that contract cannot be proven, state that Funnel would expose the whole hostname and ask the user to choose a WAF/API gateway or accept full-host exposure.
 
@@ -389,13 +430,43 @@ kubectl -n tailscale get proxygroup,statefulset,pods 2>/dev/null || true
 
 Wait for the condition emitted by the selected version. Operator `1.98.9` used `TailscaleProxyReady=True`; do not hard-code an obsolete condition name.
 
-Every backend and worker replica connects to the stable Kubernetes name:
+### HTTPS identity versus Kubernetes route
+
+The two names have different jobs:
+
+| Name | Purpose |
+|---|---|
+| `target-node.tail123abc.ts.net` | Application URL, TLS SNI, `Host`, and certificate identity. |
+| `phase-tailnet-target.phase.svc.cluster.local` | Stable Kubernetes route to the Tailscale egress proxy. |
+
+For raw TCP, or HTTP when plaintext is explicitly accepted, consumers can connect directly to the Kubernetes Service name:
 
 ```text
 phase-tailnet-target.phase.svc.cluster.local:8443
 ```
 
-Test from both a backend pod and a worker pod, using a non-secret health/readiness endpoint. Validate credentials through the application without displaying them.
+For HTTPS with a Tailscale certificate, keep `https://target-node.tail123abc.ts.net:<port>` in Phase. Using the Kubernetes Service hostname as the URL causes certificate/SNI mismatch. Never disable TLS verification to hide it.
+
+Choose a DNS route:
+
+1. **Tailscale `DNSConfig` plus a `.ts.net` CoreDNS stub** is the official general solution. It enables in-cluster MagicDNS for configured egress targets; inspect the cluster-wide DNS blast radius and follow the current Tailscale guide.
+2. **Exact AKS CoreDNS rewrite** is a narrow option for one reviewed hostname. Preserve all existing `coredns-custom` keys:
+
+   ```yaml
+   apiVersion: v1
+   kind: ConfigMap
+   metadata:
+     name: coredns-custom
+     namespace: kube-system
+   data:
+     phase-tailnet-target.override: |
+       rewrite stop name exact target-node.tail123abc.ts.net phase-tailnet-target.phase.svc.cluster.local
+   ```
+
+   AKS custom keys must end in `.server` or `.override`. Restart CoreDNS, verify the original MagicDNS query resolves to the egress proxy route, and confirm the HTTPS certificate still validates for the original hostname.
+3. Use a separate connect-address/SNI/Host override only when the application supports it and an end-to-end test proves it.
+
+For production HA, use an egress ProxyGroup with at least two replicas; this keeps the Kubernetes route stable but does not make the tailnet target itself HA. Test the target's non-secret health endpoint from **every** backend and **every** worker replica, because different features may execute in either workload. Then validate credentials through Phase without displaying them.
 
 ## Tailscale acceptance
 
@@ -407,5 +478,5 @@ Do not mark complete until:
 - tailnet policy allows intended identities and denies unintended ones;
 - Funnel, if selected, is tested from outside the tailnet and can be rolled back;
 - client IP attribution matches the path;
-- every selected egress destination works from backend and worker replicas;
+- every selected egress destination resolves and validates TLS correctly from every backend and worker replica;
 - standalone versus HA and target-side availability are documented accurately.

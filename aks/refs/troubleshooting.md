@@ -14,6 +14,8 @@ Read this before changing infrastructure. Capture non-secret evidence first; dia
 - [Stale hostname, CSP, wrong API base, or allowed-host errors](#stale-hostname-csp-wrong-api-base-or-allowed-host-errors)
 - [Tailscale operator Pending or not joining](#tailscale-operator-pending-or-not-joining)
 - [Audit logs show an AKS proxy pod IP](#audit-logs-show-an-aks-10x-proxy-pod-ip)
+- [Pods cannot resolve a tailnet hostname](#pods-cannot-resolve-a-tailnet-hostname)
+- [Funnel appears private or public tests hit MagicDNS](#funnel-appears-private-or-public-tests-hit-magicdns)
 - [Rollback principles](#rollback-principles)
 
 ## First-response bundle
@@ -222,23 +224,38 @@ Map the recorded IP to pods:
 kubectl get pods -A -o wide | rg '<recorded-ip>'
 ```
 
-If it is the Tailscale ingress proxy, NGINX is not trusting Tailscale's canonical `X-Forwarded-For`. Apply the narrow real-IP annotation in `tailscale.md` using the live pod CIDR, then generate a new event. Never rewrite historical rows or trust `0.0.0.0/0`.
+If it is the Tailscale ingress proxy, NGINX is not trusting Tailscale's canonical `X-Forwarded-For`. Apply the narrow real-IP annotation in `tailscale.md` using the selected proxy source boundary, then generate a new event. Never rewrite historical rows or trust `0.0.0.0/0`.
 
-If another pod can reach NGINX, treat full pod-CIDR trust as spoofable until NetworkPolicy or a narrower source boundary is enforced.
+Prefer the current proxy pod `/32` for a narrow immediate repair, and record that it must be refreshed after standalone proxy recreation. For a durable setup, use a dedicated proxy boundary plus NetworkPolicy. Treat full pod-CIDR trust as spoofable while any other pod can reach NGINX.
+
+Inspect rendered NGINX configuration to confirm `set_real_ip_from`, `real_ip_header X-Forwarded-For`, and recursion are active. Generate fresh requests on every enabled path:
+
+- tailnet ingress should record the caller's Tailscale IPv4/IPv6;
+- Funnel should record the public caller/NAT IPv4 or IPv6;
+- neither should record the proxy pod address.
 
 ## Pods cannot resolve a tailnet hostname
 
-This is expected by default. Operator installation does not inject MagicDNS into all pods. Create an annotated destination-specific `ExternalName` Service and connect to its Kubernetes DNS name.
+This is expected by default. Operator installation does not inject MagicDNS into all pods. Create an annotated destination-specific `ExternalName` Service first.
+
+Choose the application name by transport:
+
+- For raw TCP or explicitly accepted plaintext HTTP, connect to the Kubernetes Service name.
+- For HTTPS with a certificate issued to the MagicDNS hostname, keep the MagicDNS URL in the application and route that DNS name to the egress Service. Use the official Tailscale `DNSConfig` plus CoreDNS stub, or an exact AKS `coredns-custom` rewrite for one hostname.
+
+Do not replace an HTTPS URL with the Kubernetes Service hostname unless its certificate covers that name, and never disable TLS verification.
 
 Check:
 
 ```bash
 kubectl -n phase get service <egress-service> -o yaml
+kubectl -n kube-system get configmap coredns-custom -o yaml 2>/dev/null || true
+kubectl get dnsconfig 2>/dev/null || true
 kubectl -n tailscale get statefulset,pods -o wide
 kubectl -n tailscale get proxygroup 2>/dev/null || true
 ```
 
-Wait for the current release's readiness condition (operator `1.98.9` emitted `TailscaleProxyReady=True`). Test from both backend and worker. One Service maps only its declared destination and ports.
+Wait for the current release's readiness condition (operator `1.98.9` emitted `TailscaleProxyReady=True`). Verify DNS and certificate validation from every backend and worker replica. One Service maps only its declared destination and ports.
 
 ## Funnel appears private or public tests hit MagicDNS
 
@@ -246,7 +263,7 @@ Tagged proxies need the `funnel` node attribute explicitly; `autogroup:member` d
 
 Local DNS may intercept the tailnet's `.ts.net` domain and hide public Funnel records. Use DNS-over-HTTPS, then `curl --resolve` with `--noproxy '*'` against a public relay IP. Preserve the hostname for TLS SNI and Host.
 
-If public tests still fail, remove the Funnel annotation to return to the known private state, inspect operator/proxy logs, and verify current release support. Do not disable TLS verification.
+If public tests still fail, remove the Funnel annotation to return to the known private state, inspect operator/proxy logs, and verify current release support. Do not disable TLS verification. Keep Funnel marked `selected` or `deferred`; do not silently report the private route as the requested final exposure.
 
 ## Rollback principles
 

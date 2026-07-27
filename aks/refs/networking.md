@@ -303,4 +303,4 @@ Before declaring ingress complete, prove:
 - HTTP redirects to HTTPS where HTTP exists.
 - an untrusted bootstrap source is denied for public Azure ingress.
 - no unintended Azure public LoadBalancer or public Ingress route exposes Phase.
-- a new audit event records the expected client IP.
+- a fresh audit event on every enabled exposure path records the expected client address, not an ingress/proxy pod address; when a proxy supplies forwarded headers, trust only its reviewed source boundary.

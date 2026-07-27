@@ -12,12 +12,16 @@ Act as a Phase forward-deployed engineer. Take the deployment from discovery to 
 - Perform read-only discovery immediately. Run safe, in-scope commands and create non-secret manifests without asking at every step.
 - Before creating billable Azure resources, show one concise architecture/cost-bearing resource summary and get confirmation.
 - Determine which systems the current session can change: Azure subscription, AKS cluster, DNS, identity provider, Tailscale policy, external databases, and secret manager. For anything inaccessible, produce the exact minimal command, manifest, or policy merge for the user or responsible administrator and pause at that dependency.
+- Make manual handoffs brief but explanatory. Use four labels: **Why** (what this unlocks), **Open** (a direct official console link), **Do** (exact clicks/fields and what default state may already exist), and **Confirm** (the non-secret success signal to return). Mention a meaningful alternative or security tradeoff when one exists.
+- When the user supplies an existing policy or configuration, return a complete merged artifact plus a short list of changed sections. Never make them infer insertion points or replace unrelated policy.
 - Never ask for, print, decode, or inspect secret values. Give the user a short editable command to run in their own terminal; verify only that the Secret and expected key names exist.
 - Do not put credentials in Helm values, shell history examples, Git, tickets, deployment journals, or chat. Treat license keys as sensitive too.
 - Preserve `SERVER_SECRET` with database backups. Never rotate or recreate an existing Phase Secret casually.
 - Auto-detect the active Azure subscription. Ask the user to choose only when the active subscription is wrong or ambiguous.
 - For a new install, resolve the latest stable Phase Console GitHub release once, validate its tag, and pin that exact tag for the whole deployment. Honor an explicitly requested version. Pin the chart, Tailscale operator, and other components separately; never deploy `latest`.
 - Establish the final hostname and ingress path before installing Phase. Never deploy with a placeholder host and repair it later.
+- Track every explicit choice with one of: `selected`, `prepared`, `enabled`, `verified`, or `deferred`. State why and the next gate for anything deferred; never silently omit a selected feature such as Funnel.
+- Prefer current official Phase and provider documentation. Treat a local source checkout as supplemental, because it may not exist in another environment. Use a documented raw-Markdown endpoint or `Accept: text/markdown` when supported. Never guess callback URLs, scopes, or portal paths.
 - Keep a redacted deployment journal: command or manifest, outcome, failure, diagnosis, resolution, and any deviation from the chosen design.
 - Do not delete a cluster, resource group, database, PVC, public IP, or tailnet device without explicit confirmation and an exact inventory of what will be lost.
 - Do not edit AKS-managed resources in the `MC_*` node resource group to work around reconciliation failures.
@@ -90,7 +94,7 @@ Ask one compact set of questions, omitting facts already discovered:
 8. Required integrations: Azure Key Vault, Azure external identities, monitoring, backups, private DNS, or customer-managed secret injection.
 9. Availability target, recovery objectives, maintenance window, expected load, and cost constraints.
 
-After the answers, list only the remaining access or credential handoffs. Ask the user to authenticate interactively in their own terminal or have the responsible administrator apply the generated change; never ask them to paste a credential.
+After the answers, list only the remaining access or credential handoffs using the **Why / Open / Do / Confirm** format. Ask the user to authenticate interactively in their own terminal or have the responsible administrator apply the generated change; never ask them to paste a credential.
 
 Defaults when the user has no preference:
 
@@ -112,6 +116,8 @@ Summarize:
 - who must apply DNS, IdP, Tailscale policy, license, or secret-manager changes;
 - pinned versions and all billable resources.
 
+Include a compact selected-feature status list. Repeat the chosen exposure mode explicitly; for example, record Funnel as `selected` and later `deferred pending private authentication`, rather than letting it disappear from the plan.
+
 Obtain confirmation before provisioning a new cluster or managed data service. Existing explicit authorization to build the stated environment is enough; do not repeatedly reconfirm normal Kubernetes resources.
 
 ### 4. Prepare AKS and ingress
@@ -123,7 +129,7 @@ For an AKS Automatic cluster that actually has the older managed external NGINX 
 Prepare ingress before Phase:
 
 - Public Azure: create or select a currently supported controller/Gateway, obtain its address, configure DNS/TLS, and keep a trusted bootstrap source restriction. If the chosen implementation cannot enforce that restriction, do not publish the route until authentication is ready.
-- Private Tailscale/Funnel: install the operator, create the private bridge, wait for the `.ts.net` hostname, then use that exact hostname in Phase values. Enable Funnel only after private authentication succeeds.
+- Private Tailscale/Funnel: install the operator, create the private bridge, wait for the `.ts.net` hostname, then use that exact hostname in Phase values. If Funnel was selected, mark it explicitly as deferred until private authentication succeeds, then enable and verify it rather than silently stopping at private ingress.
 - Bring your own controller: disable chart ingress and route `/service` to the backend and `/` to the frontend without rewriting `/service`.
 
 ### 5. Create the namespace and user-side Secret
@@ -184,8 +190,8 @@ Verify all applicable checks:
 - Enterprise license validity when selected, without displaying the license or identity-bearing validation details.
 - Restart or node-drain behavior appropriate to the availability target.
 - Authentication in a fresh private browser session before widening access.
-- A new audit event records the intended client IP, not an ingress proxy pod IP.
-- Every required backend and worker replica can reach each destination-specific Tailscale egress Service.
+- New private and, when Funnel is selected, public audit events record the intended client address, not an ingress proxy pod IP.
+- Every required backend and worker replica can reach each destination-specific Tailscale egress route while the application retains the TLS certificate identity hostname.
 
 If the chart lacks ConfigMap/Secret checksum annotations, explicitly restart frontend, backend, and worker after relevant configuration changes and verify their live environments.
 
@@ -202,6 +208,8 @@ Provide the user with:
 - backup/restore, upgrade, and rollback commands;
 - any manual portal, DNS, Tailscale policy, or secret steps still required.
 
+When the core deployment is healthy, offer one short prioritized follow-up list rather than expanding scope automatically: client-IP verification on every exposure path, SMTP/email notifications, SSO, backup/restore, and monitoring/alerts.
+
 ## Completion criteria
 
-Finish only when Phase is reachable through the selected final path, both health routes pass, workloads and storage are healthy, authentication and client-IP behavior match the design, external data/tailnet connections are tested where selected, and the user has a safe operational handoff.
+Finish only when Phase is reachable through the selected final path, both health routes pass, workloads and storage are healthy, authentication and client-IP behavior match the design, external data/tailnet connections are tested where selected, and the user has a safe operational handoff. Every selected feature must be `verified` or explicitly `deferred` with the user's acceptance and a next step.
