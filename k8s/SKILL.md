@@ -1,12 +1,16 @@
 ---
 name: k8s
 description: |
+  [Upstream Phase guide, not adapted to LibreSeal]
   Deploy Phase Console on a generic Kubernetes cluster. Triggers: "deploy Phase on Kubernetes",
   "install Phase on k8s", "self-host Phase on Kubernetes", "Phase Kubernetes deployment",
   "deploy Phase to my cluster", "set up Phase on k8s", "Phase Helm Kubernetes setup"
 ---
 
 # Deploy Phase Console on Kubernetes
+
+> **Not adapted to LibreSeal.** This is the upstream Phase guide, kept for reference. It deploys Phase images and Helm charts, not LibreSeal. Use the `docker-compose` skill instead.
+
 
 This skill autonomously deploys Phase Console on any Kubernetes cluster using the Phase Helm chart. The agent handles all file creation and kubectl/helm commands directly. The user only handles things that require their own secrets.
 
