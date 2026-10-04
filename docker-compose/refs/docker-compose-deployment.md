@@ -1,233 +1,164 @@
-# Docker Compose Deployment Reference
+# Docker Compose Deployment Reference (LibreSeal)
 
-Complete reference for deploying Phase Console with Docker Compose and Let's Encrypt TLS.
+Reference for deploying LibreSeal from `https://github.com/Dos2Locos/libreseal` with Docker Compose, plus optional Let's Encrypt TLS.
 
 ## Architecture
 
 ```
-Internet
+Clients (browser, libreseal CLI, apps)
     │
     ▼
- Nginx :80/:443
-    ├── /.well-known/acme-challenge/ → /var/www/certbot (certbot webroot)
-    ├── /service/ → backend:8000 (Django API)
-    └── / → frontend:3000 (Next.js)
+ nginx :HTTP_PORT/:HTTPS_PORT            (libreseal-nginx)
+    ├── /service/ → backend:8000 (Django API, libreseal-backend)
+    └── /         → frontend:3000 (Next.js, libreseal-frontend)
          │
     ┌────┴─────┐
-    │          │
- Postgres   Redis
+ Postgres    Redis        (+ worker, + one-shot migrations)
 ```
 
-## configure-env.sh Template
+Data lives in the named volume `libreseal-postgres-data`.
 
-Write this as `configure-env.sh`, `chmod +x` it. Auto-generates all secrets. Mark OAuth fields with `# EDIT_ME`.
+## `.env` produced by `scripts/libreseal-init.sh`
+
+| Variable | Meaning |
+|---|---|
+| `HOST` | Bare hostname (no scheme/port). Used for `ALLOWED_HOSTS` and the session cookie domain |
+| `PUBLIC_URL` | `https://HOST[:HTTPS_PORT]` — the URL users and the CLI use |
+| `HTTP_PORT`, `HTTPS_PORT` | Host ports published by nginx |
+| `NEXTAUTH_SECRET`, `SECRET_KEY`, `SERVER_SECRET`, `DATABASE_PASSWORD` | Random 32-byte hex values generated per install. **Never print or share.** `SERVER_SECRET` is required to read server-side encrypted data after a restore |
+| `ENABLE_PASSWORD_AUTH` | `true` by default |
+| `SSO_PROVIDERS` | Optional, comma-separated: `google`, `github`, `gitlab`, `authentik`, `authelia` |
+
+To move to another hostname or port later, the user edits `HOST`, `PUBLIC_URL`, `HTTP_PORT`, `HTTPS_PORT` in `.env` and runs `docker compose up -d`.
+
+## OAuth / OIDC callback URLs
+
+Pattern: `{PUBLIC_URL}/api/auth/callback/{provider}`
+
+| Provider | `SSO_PROVIDERS` value | Extra variables |
+|---|---|---|
+| Google | `google` | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
+| GitHub | `github` | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` |
+| GitLab | `gitlab` | `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` (`GITLAB_AUTH_URL` for self-hosted GitLab) |
+| Authentik | `authentik` | `AUTHENTIK_URL`, `AUTHENTIK_APP_SLUG`, `AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET` |
+| Authelia | `authelia` | `AUTHELIA_URL`, `AUTHELIA_CLIENT_ID`, `AUTHELIA_CLIENT_SECRET` |
+
+Only the user edits these values in `.env`.
+
+## Health checks
 
 ```bash
-#!/bin/bash
-# Phase Console environment configuration
-# Edit the EDIT_ME values below, then run this script to generate your .env
-
-DOMAIN="EDIT_ME_YOUR_DOMAIN"         # EDIT_ME: e.g. phase.example.com
-SSO_PROVIDERS="EDIT_ME_PROVIDERS"    # EDIT_ME: e.g. google,github
-
-# OAuth credentials — fill in after creating OAuth apps
-GOOGLE_CLIENT_ID="EDIT_ME"           # EDIT_ME: Google OAuth Client ID
-GOOGLE_CLIENT_SECRET="EDIT_ME"       # EDIT_ME: Google OAuth Client Secret
-GITHUB_CLIENT_ID="EDIT_ME"           # EDIT_ME: GitHub OAuth Client ID
-GITHUB_CLIENT_SECRET="EDIT_ME"       # EDIT_ME: GitHub OAuth Client Secret
-GITLAB_CLIENT_ID="EDIT_ME"           # EDIT_ME: GitLab OAuth Client ID
-GITLAB_CLIENT_SECRET="EDIT_ME"       # EDIT_ME: GitLab OAuth Client Secret
-
-# GitHub integration (optional — for syncing secrets to GitHub Actions)
-GITHUB_INTEGRATION_CLIENT_ID="EDIT_ME"      # EDIT_ME (optional)
-GITHUB_INTEGRATION_CLIENT_SECRET="EDIT_ME"  # EDIT_ME (optional)
-
-# Enterprise license (leave blank if not applicable)
-PHASE_LICENSE_OFFLINE=""
-
-cat > .env <<EOF
-HOST=${DOMAIN}
-HTTP_PROTOCOL=https://
-
-SSO_PROVIDERS=${SSO_PROVIDERS}
-
-NEXTAUTH_SECRET=$(openssl rand -hex 32)
-SECRET_KEY=$(openssl rand -hex 32)
-SERVER_SECRET=$(openssl rand -hex 32)
-
-GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-
-GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
-GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
-
-GITLAB_CLIENT_ID=${GITLAB_CLIENT_ID}
-GITLAB_CLIENT_SECRET=${GITLAB_CLIENT_SECRET}
-
-GITHUB_INTEGRATION_CLIENT_ID=${GITHUB_INTEGRATION_CLIENT_ID}
-GITHUB_INTEGRATION_CLIENT_SECRET=${GITHUB_INTEGRATION_CLIENT_SECRET}
-
-DATABASE_HOST=postgres
-DATABASE_PORT=5432
-DATABASE_NAME=phase-db
-DATABASE_USER=phase
-DATABASE_PASSWORD=$(openssl rand -hex 32)
-
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=
-
-NEXT_TELEMETRY_DISABLED=1
-PHASE_LICENSE_OFFLINE=${PHASE_LICENSE_OFFLINE}
-EOF
-
-echo ".env written successfully."
+curl -ksS {PUBLIC_URL}/service/health/      # {"status": "alive", "version": "..."}
+curl -ks -o /dev/null -w '%{http_code}\n' {PUBLIC_URL}/login
+docker compose ps
 ```
 
-Only include credential lines for the SSO providers the user actually needs. Remove unused provider blocks entirely to keep the `.env` clean.
+## Backup and restore
 
-## SSO OAuth Callback URLs
+```bash
+./scripts/libreseal-backup.sh [OUTPUT_DIR]          # pg_dump custom format, mode 600, verified with pg_restore --list
+./scripts/libreseal-restore.sh --yes FILE           # stops app services, pg_restore --clean, starts everything
+```
 
-Pattern: `https://{DOMAIN}/api/auth/callback/{provider_slug}`
+A restore only works with the same `.env` secrets. Users still need their own password or recovery phrase to decrypt secrets.
 
-| Provider | Slug | Callback URL |
-|---|---|---|
-| Google OAuth | `google` | `https://{domain}/api/auth/callback/google` |
-| GitHub OAuth | `github` | `https://{domain}/api/auth/callback/github` |
-| GitLab OAuth | `gitlab` | `https://{domain}/api/auth/callback/gitlab` |
-| Authentik | `authentik` | `https://{domain}/api/auth/callback/authentik` |
-| GitHub Enterprise | `github-enterprise` | `https://{domain}/api/auth/callback/github-enterprise` |
-| Google OIDC | `google-oidc` | `https://{domain}/api/auth/callback/google-oidc` |
-| JumpCloud OIDC | `jumpcloud-oidc` | `https://{domain}/api/auth/callback/jumpcloud-oidc` |
-| Microsoft Entra ID | `entra-id-oidc` | `https://{domain}/api/auth/callback/entra-id-oidc` |
-| Okta OIDC | `okta-oidc` | `https://{domain}/api/auth/callback/okta-oidc` |
+## Let's Encrypt
 
-## docker-compose.yml — Certbot Patch
+Requires a public domain whose A/AAAA record points at this server and port 80 reachable from the Internet (`HTTP_PORT=80`).
 
-Add the following to the existing `docker-compose.yml`. Do not remove or modify any existing service definitions.
+### 1. Verify DNS
 
-**Add to the `nginx` service's `volumes` list:**
+```bash
+curl -s https://api.ipify.org            # server public IP
+dig @1.1.1.1 {DOMAIN} +short
+dig @8.8.8.8 {DOMAIN} +short
+dig @9.9.9.9 {DOMAIN} +short
+```
+
+Proceed only when all resolvers return the server IP.
+
+### 2. Add certbot to `docker-compose.yml`
+
+Add to the `nginx` service `volumes`:
 
 ```yaml
       - certbot-webroot:/var/www/certbot:ro
       - certbot-certs:/etc/letsencrypt:ro
 ```
 
-**Add the `certbot` service at the end of the `services` block:**
+Add the service:
 
 ```yaml
   certbot:
-    container_name: phase-certbot
+    container_name: libreseal-certbot
     image: certbot/certbot:latest
     volumes:
       - certbot-webroot:/var/www/certbot
       - certbot-certs:/etc/letsencrypt
 ```
 
-**Add to the `volumes` block:**
+Add to the top-level `volumes`:
 
 ```yaml
   certbot-webroot:
-    driver: local
   certbot-certs:
-    driver: local
 ```
 
-The full patched `nginx` service should look like:
+### 3. nginx config with ACME challenge
 
-```yaml
-  nginx:
-    container_name: phase-nginx
-    build:
-      context: .
-      dockerfile: ./nginx/Dockerfile
-    restart: always
-    ports:
-      - 80:80
-      - 443:443
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - certbot-webroot:/var/www/certbot:ro
-      - certbot-certs:/etc/letsencrypt:ro
-    depends_on:
-      - frontend
-      - backend
-    networks:
-      - phase-net
-```
-
-## nginx/default.conf — Let's Encrypt Ready
-
-This replaces the existing `nginx/default.conf` entirely. Preserves all existing routing. The HTTPS block initially uses the self-signed cert baked into the nginx image — this gets swapped to Let's Encrypt after cert issuance.
+Replace `nginx/default.conf` with:
 
 ```nginx
-# HTTP — serve ACME challenges, redirect everything else to HTTPS
 server {
     listen 80;
     server_tokens off;
 
-    # Let's Encrypt ACME challenge (certbot webroot)
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
 
-    # Redirect all other HTTP traffic to HTTPS
     location / {
         return 301 https://$host$request_uri;
     }
 }
 
-# HTTPS — reverse proxy to Phase services
 server {
     listen 443 ssl;
     http2 on;
     server_tokens off;
 
-    # TLS config
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers EECDH+AESGCM:EECDH+CHACHA20;
     ssl_prefer_server_ciphers on;
 
-    # TLS certificate
-    # Initially: self-signed cert baked into the nginx image (allows nginx to start)
-    # After cert issuance: updated to Let's Encrypt paths (step 5f)
+    # Initially the self-signed certificate baked into the nginx image.
     ssl_certificate /etc/nginx/ssl/nginx.crt;
     ssl_certificate_key /etc/nginx/ssl/nginx.key;
 
-    # Route API traffic to backend — https://example.com/service/ -> http://backend:8000/
     location /service/ {
         rewrite ^/service/(.*) /$1 break;
-
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header Host $http_host;
         proxy_set_header X-NginX-Proxy true;
-
         proxy_pass http://backend:8000;
         proxy_redirect off;
-
         proxy_cookie_path / "/; HttpOnly; SameSite=strict";
-
         proxy_buffers 16 32k;
         proxy_buffer_size 64k;
         proxy_busy_buffers_size 128k;
     }
 
-    # Route all other traffic to frontend — https://example.com/ -> http://frontend:3000/
     location / {
         include /etc/nginx/mime.types;
-
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header Host $http_host;
         proxy_set_header X-NginX-Proxy true;
-
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-
         proxy_pass http://frontend:3000;
         proxy_redirect off;
-
         proxy_buffers 16 32k;
         proxy_buffer_size 64k;
         proxy_busy_buffers_size 128k;
@@ -235,132 +166,43 @@ server {
 }
 ```
 
-## nginx/default.conf — After Let's Encrypt (step 5f)
+```bash
+docker compose up -d nginx
+```
 
-After certbot issues the cert, update the two `ssl_certificate` lines in the HTTPS server block:
+### 4. Issue the certificate
+
+```bash
+docker compose run --rm certbot certonly --webroot --webroot-path=/var/www/certbot \
+  --email {EMAIL} --agree-tos --no-eff-email -d {DOMAIN}
+```
+
+### 5. Switch nginx to the certificate
 
 ```nginx
-    # Let's Encrypt certificate (issued by certbot)
     ssl_certificate /etc/letsencrypt/live/{DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{DOMAIN}/privkey.pem;
-    ssl_trusted_certificate /etc/letsencrypt/live/{DOMAIN}/chain.pem;
-
-    # OCSP stapling
-    ssl_stapling on;
-    ssl_stapling_verify on;
-    resolver 8.8.8.8 1.1.1.1 valid=300s;
-    resolver_timeout 5s;
 ```
-
-All routing (`/service/`, `/`) stays exactly the same — only the cert block changes.
-
-Then reload nginx without restarting:
 
 ```bash
 docker compose exec nginx nginx -s reload
+echo | openssl s_client -connect {DOMAIN}:443 -servername {DOMAIN} 2>/dev/null | openssl x509 -noout -issuer -dates
 ```
 
-## DNS Verification
-
-Before running certbot, verify the domain resolves to the server's public IP:
-
-```bash
-# Get the server's public IP
-curl -s https://api.ipify.org
-
-# Check DNS resolution from multiple resolvers
-dig @8.8.8.8 ${DOMAIN} +short
-dig @1.1.1.1 ${DOMAIN} +short
-dig @9.9.9.9 ${DOMAIN} +short
-dig @208.67.222.222 ${DOMAIN} +short
-```
-
-All resolvers should return the server's public IP. Proceed only when at least 3 of 4 agree.
-
-## Certbot Commands
-
-### Initial certificate issuance
-
-```bash
-docker compose run --rm certbot certonly \
-  --webroot \
-  --webroot-path=/var/www/certbot \
-  --email {EMAIL} \
-  --agree-tos \
-  --no-eff-email \
-  -d {DOMAIN}
-```
-
-### Manual renewal test (dry run)
-
-```bash
-docker compose run --rm certbot renew --dry-run
-```
-
-### Force renewal
-
-```bash
-docker compose run --rm certbot renew --force-renewal
-docker compose exec nginx nginx -s reload
-```
-
-## Auto-Renewal Cron Job
-
-Install a cron job that attempts renewal twice daily. Certbot only actually renews when the cert is within 30 days of expiry.
+### 6. Renewal
 
 ```bash
 (crontab -l 2>/dev/null; echo "0 0,12 * * * cd {WORKING_DIR} && docker compose run --rm certbot renew --quiet && docker compose exec nginx nginx -s reload") | crontab -
 ```
 
-Verify it was installed:
+## Upgrading
 
 ```bash
-crontab -l
+./scripts/libreseal-backup.sh
+git pull
+docker compose up -d --build
 ```
 
-## Health Check Endpoints
+## Cloudflare
 
-```bash
-# Frontend health
-curl -s https://{DOMAIN}/api/health
-
-# Backend health
-curl -s https://{DOMAIN}/service/health/
-```
-
-Both should return HTTP 200.
-
-## Certificate Verification
-
-```bash
-# Check issuer and expiry
-curl -sv https://{DOMAIN} 2>&1 | grep -E "issuer|expire|SSL connection"
-
-# Or use openssl
-echo | openssl s_client -connect {DOMAIN}:443 -servername {DOMAIN} 2>/dev/null \
-  | openssl x509 -noout -issuer -dates
-```
-
-## Upgrading Phase
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-The certbot volumes and cron job are unaffected by upgrades.
-
-## Cloudflare Users
-
-If the domain uses Cloudflare as a proxy (orange cloud), set SSL/TLS mode to **Full (strict)** in the Cloudflare dashboard. The Let's Encrypt cert on the origin server satisfies strict mode.
-
-If using Cloudflare's proxy, you may also want to forward the real client IP. Uncomment the Cloudflare IP header block in `nginx/default.conf`:
-
-```nginx
-map $http_cf_connecting_ip $client_real_ip {
-    default $remote_addr;
-    "~." $http_cf_connecting_ip;
-}
-```
-
-Then replace `$remote_addr` with `$client_real_ip` in the `proxy_set_header X-Real-IP` lines.
+With Cloudflare proxying, use SSL/TLS mode **Full (strict)** and forward the real client IP by enabling the commented `map $http_cf_connecting_ip` block in `nginx/default.conf` and using `$client_real_ip` in `X-Real-IP`.

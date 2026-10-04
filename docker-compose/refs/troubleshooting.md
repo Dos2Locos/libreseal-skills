@@ -1,14 +1,14 @@
 # Troubleshooting Guide
 
-Common issues when deploying Phase Console with Docker Compose, with a focus on Let's Encrypt certificate setup.
+Common issues when deploying LibreSeal with Docker Compose, with a focus on Let's Encrypt certificate setup.
 
 ## ACME Challenge Fails (certbot can't get certificate)
 
 **Symptom:** `docker compose run --rm certbot certonly ...` fails with an error like:
 
 ```
-Challenge failed for domain phase.example.com
-http-01 challenge for phase.example.com
+Challenge failed for domain secrets.example.com
+http-01 challenge for secrets.example.com
 Cleaning up challenges
 Some challenges have failed.
 ```
@@ -130,9 +130,9 @@ Reinstall the cron job:
 (crontab -l 2>/dev/null | grep -v certbot; echo "0 0,12 * * * cd {working_dir} && docker compose run --rm certbot renew --quiet && docker compose exec nginx nginx -s reload") | crontab -
 ```
 
-## Phase Container CrashLooping
+## LibreSeal Container CrashLooping
 
-**Symptom:** `docker compose ps` shows a Phase container restarting repeatedly.
+**Symptom:** `docker compose ps` shows a LibreSeal container restarting repeatedly.
 
 **Diagnosis:**
 
@@ -147,8 +147,8 @@ docker compose logs migrations
 
 - **Missing or invalid `.env`** — `HOST`, `NEXTAUTH_SECRET`, `SECRET_KEY`, `SERVER_SECRET`, `DATABASE_PASSWORD` must all be set.
 - **Database migration failure** — Check `docker compose logs migrations`. Often caused by a wrong `DATABASE_PASSWORD` or Postgres not yet healthy.
-- **Invalid `HOST` value** — Must be just the domain (`phase.example.com`), not `https://phase.example.com`.
-- **Invalid `HTTP_PROTOCOL`** — Must be `https://` (with trailing slash).
+- **Invalid `HOST` value** — Must be just the domain (`secrets.example.com`), not `https://secrets.example.com`.
+- **Invalid `PUBLIC_URL`** — Must be `https://HOST` or `https://HOST:HTTPS_PORT`, matching `HOST` and `HTTPS_PORT`.
 
 ## 502 Bad Gateway
 
@@ -164,7 +164,7 @@ docker compose logs backend
 docker compose logs frontend
 ```
 
-**Fix:** Wait for migrations to complete — the backend only starts after `phase-migrations` exits successfully. Check:
+**Fix:** Wait for migrations to complete — the backend only starts after `libreseal-migrations` exits successfully. Check:
 
 ```bash
 docker compose logs migrations
@@ -202,9 +202,9 @@ docker compose run --rm certbot delete --cert-name {DOMAIN}
 # Then re-run without --staging
 ```
 
-## Can't Connect to Phase After DNS Change
+## Can't Connect to LibreSeal After DNS Change
 
-**Symptom:** Phase was working, then DNS was changed (e.g., moving to Cloudflare), and now it fails.
+**Symptom:** LibreSeal was working, then DNS was changed (e.g., moving to Cloudflare), and now it fails.
 
 **Cause:** If Cloudflare proxy (orange cloud) is enabled but SSL mode isn't set to `Full (strict)`, Cloudflare will try to connect to the origin over plain HTTP and get rejected.
 
@@ -230,3 +230,23 @@ docker volume prune
 ```
 
 Be careful — `docker volume prune` removes ALL unused volumes, not just certbot's. Only run if you're sure no important data is in unnamed volumes.
+
+## Port Already in Use
+
+**Symptom:** `docker compose up` fails with `bind: address already in use` for port 80 or 443.
+
+**Fix:** Another service owns the port. Pick free ports and update `.env` (`HTTP_PORT`, `HTTPS_PORT` and the port in `PUBLIC_URL`), then `docker compose up -d`. For a fresh install pass `--http-port`/`--https-port` to `scripts/libreseal-init.sh`.
+
+## CLI Fails with a Certificate Error on a LAN Install
+
+**Symptom:** `libreseal` reports an SSL error against the bundled self-signed certificate.
+
+**Fix:** Prefer a trusted certificate (Let's Encrypt or your own CA mounted into nginx). For local testing only, `export LIBRESEAL_VERIFY_SSL=False`.
+
+## Access Denied: Network Access Policies
+
+**Symptom:** API or UI calls return "network access policies apply to this account but LibreSeal cannot enforce them".
+
+**Cause:** The database was migrated from Phase with network policies. LibreSeal cannot verify them and fails closed.
+
+**Fix (operator):** `docker compose exec backend python manage.py libreseal_clear_network_policies` lists them; add `--yes` to delete.
