@@ -127,6 +127,11 @@ server {
     http2 on;
     server_tokens off;
 
+    # Resolve upstreams at request time (survives recreated containers).
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $backend_upstream http://backend:8000;
+    set $frontend_upstream http://frontend:3000;
+
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers EECDH+AESGCM:EECDH+CHACHA20;
     ssl_prefer_server_ciphers on;
@@ -135,13 +140,17 @@ server {
     ssl_certificate /etc/nginx/ssl/nginx.crt;
     ssl_certificate_key /etc/nginx/ssl/nginx.key;
 
+    # Real client IP behind another proxy (NGINX_REAL_IP_FROM in .env).
+    include /etc/nginx/real-ip.conf;
+
     location /service/ {
         rewrite ^/service/(.*) /$1 break;
+        # Overwrite (never append) client-supplied forwarding headers.
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Host $http_host;
         proxy_set_header X-NginX-Proxy true;
-        proxy_pass http://backend:8000;
+        proxy_pass $backend_upstream;
         proxy_redirect off;
         proxy_cookie_path / "/; HttpOnly; SameSite=strict";
         proxy_buffers 16 32k;
@@ -152,12 +161,12 @@ server {
     location / {
         include /etc/nginx/mime.types;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Host $http_host;
         proxy_set_header X-NginX-Proxy true;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_pass http://frontend:3000;
+        proxy_pass $frontend_upstream;
         proxy_redirect off;
         proxy_buffers 16 32k;
         proxy_buffer_size 64k;
@@ -205,4 +214,11 @@ docker compose up -d --build
 
 ## Cloudflare
 
-With Cloudflare proxying, use SSL/TLS mode **Full (strict)** and forward the real client IP by enabling the commented `map $http_cf_connecting_ip` block in `nginx/default.conf` and using `$client_real_ip` in `X-Real-IP`.
+With Cloudflare proxying, use SSL/TLS mode **Full (strict)** and let nginx take the real client IP from Cloudflare (needed for network access policies). In `.env` list [Cloudflare's published IP ranges](https://www.cloudflare.com/ips/) and set the header, then `docker compose up -d nginx`:
+
+```bash
+NGINX_REAL_IP_FROM=173.245.48.0/20,103.21.244.0/22,...   # all ranges from cloudflare.com/ips
+NGINX_REAL_IP_HEADER=CF-Connecting-IP
+```
+
+The same two variables work for any reverse proxy in front of nginx (Traefik, Caddy, Cloudflare Tunnel): list only proxies you control.

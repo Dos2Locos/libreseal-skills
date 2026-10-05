@@ -154,7 +154,7 @@ docker compose logs migrations
 
 **Symptom:** nginx returns 502 Bad Gateway.
 
-**Cause:** The upstream service (frontend or backend) is not ready yet.
+**Cause:** The upstream service (frontend or backend) is not ready yet. On LibreSeal versions whose `nginx/default.conf` has no `resolver 127.0.0.11` line, nginx also keeps proxying to a stale container IP after the backend or frontend is recreated (e.g. after `docker compose up -d --build`); `docker compose restart nginx` fixes it, and current versions resolve upstreams at request time.
 
 **Diagnosis:**
 
@@ -245,8 +245,49 @@ Be careful — `docker volume prune` removes ALL unused volumes, not just certbo
 
 ## Access Denied: Network Access Policies
 
-**Symptom:** API or UI calls return "network access policies apply to this account but LibreSeal cannot enforce them".
+**Symptom:** API calls return 403 "Access denied: a network access policy restricts access from your IP address", or the UI/GraphQL reports "Your IP address is not allowed to access {ORG}". Token issuance through AWS IAM / Azure Entra identities returns the same 403.
 
-**Cause:** The database was migrated from Phase with network policies. LibreSeal cannot verify them and fails closed.
+**Cause:** A network access policy (Access Control → Network) applies to the account — its own or an organisation-global one — and the client IP is not in any of its IPs/CIDRs. Common reasons:
 
-**Fix (operator):** `docker compose exec backend python manage.py libreseal_clear_network_policies` lists them; add `--yes` to delete.
+- The client really is outside the allowed ranges (VPN off, new public IP).
+- **Another reverse proxy sits in front of the bundled nginx** (Traefik, Caddy, Cloudflare Tunnel…), so every request appears to come from that proxy.
+- The backend is reached without the bundled nginx and `TRUSTED_PROXY_CIDRS` does not include the proxy that sets `X-Real-IP`/`X-Forwarded-For`.
+
+**Diagnosis:** the bundled nginx logs the client IP it resolved as the first field of each access-log line:
+
+```bash
+docker compose logs --tail 20 nginx
+```
+
+**Fix:**
+
+- Outer proxy: set in `.env` the proxy addresses and header, then `docker compose up -d nginx`:
+  ```bash
+  NGINX_REAL_IP_FROM=172.18.0.10            # your proxy IPs/CIDRs, comma-separated (never 0.0.0.0/0)
+  NGINX_REAL_IP_HEADER=X-Forwarded-For      # Cloudflare: CF-Connecting-IP
+  ```
+- Outside the bundled Compose setup, set `TRUSTED_PROXY_CIDRS` to the address of the proxy in front of the backend.
+- Wrong policy or locked out (operator, on the host):
+  ```bash
+  docker compose exec backend python manage.py libreseal_clear_network_policies                          # list
+  docker compose exec backend python manage.py libreseal_clear_network_policies --organisation {ORG} --yes # delete
+  ```
+  Deletions are recorded in the organisation's audit log.
+
+Servers from before network policies were enforced report "network access policies apply to this account but LibreSeal cannot enforce them"; the same command clears them.
+
+## Dynamic or Rotating Secrets Migrated from Phase
+
+**Symptom:** `libreseal run`/`secrets export` fails with "HTTP 501: The dynamic secrets feature is not available in LibreSeal…", or deleting an app, environment or folder is refused because it "contains dynamic or rotating secrets with live provider credentials migrated from Phase".
+
+**Cause:** The database came from Phase with dynamic or rotating secrets. LibreSeal cannot serve them nor revoke their credentials at the provider, so it fails explicitly instead of dropping them silently.
+
+**Fix (operator):**
+
+```bash
+docker compose exec backend python manage.py libreseal_remove_legacy_credentials              # list
+docker compose exec backend python manage.py libreseal_remove_legacy_credentials --yes        # remove those without live credentials
+# After revoking the remaining credentials at the provider (AWS, database…):
+docker compose exec backend python manage.py libreseal_remove_legacy_credentials --yes --credentials-revoked
+```
+

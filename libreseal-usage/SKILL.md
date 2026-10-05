@@ -28,6 +28,8 @@ A human can install it into the agent's skill directory with `libreseal ai enabl
 - **Inject, don't copy.** Start processes with `libreseal run '<command>'` so secrets go straight into the process environment.
 - **Generate sensitive values** with `--random` (`libreseal secrets create KEY --random base64url --length 48 --type sealed`). Ask the user to type any specific sensitive value themselves.
 - **On 401/403, stop.** Report which app/environment was denied; do not ask for broader credentials.
+- **On a network access policy denial** ("a network access policy restricts access from your IP address"), stop and tell the user; do not try other networks, proxies or headers to get around it.
+- **On "dynamic secrets feature is not available" (HTTP 501)**, stop and tell the user: an operator must clean up records migrated from Phase.
 - The CLI blocks `printenv`/`env`/`export`/`set` inside `libreseal run` when it detects an agent; this is defence in depth and can be bypassed, so the rules above still apply.
 
 ## Setup check
