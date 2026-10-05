@@ -1,12 +1,16 @@
 ---
 name: eks
 description: |
+  [Upstream Phase guide, not adapted to LibreSeal]
   Deploy Phase Console on AWS EKS. Triggers: "deploy Phase on EKS", "set up EKS cluster for Phase",
   "install Phase Console on AWS", "Phase EKS deployment", "deploy Phase to Kubernetes on AWS",
   "set up Phase on AWS", "Phase Helm EKS setup"
 ---
 
 # Deploy Phase Console on AWS EKS
+
+> **Not adapted to LibreSeal.** This is the upstream Phase guide, kept for reference. It deploys Phase images and Helm charts, not LibreSeal. Use the `docker-compose` skill instead.
+
 
 This skill autonomously deploys Phase Console on AWS EKS using the Phase Helm chart. The agent handles all file creation, kubectl, helm, aws, and eksctl commands directly. The user only handles things that require their own secrets.
 

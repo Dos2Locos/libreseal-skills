@@ -1,221 +1,107 @@
 ---
 name: docker-compose
 description: |
-  Deploy Phase Console with Docker Compose. Triggers: "deploy Phase with Docker Compose",
-  "self-host Phase on Docker", "install Phase Console Docker", "Phase Docker Compose setup",
-  "set up Phase on my server", "Phase self-hosting Docker", "fix Phase SSL certificate",
-  "get a real certificate for Phase", "replace self-signed cert Phase", "Let's Encrypt Phase Docker"
+  Deploy LibreSeal (self-hosted secrets manager, independent fork of Phase Console) with Docker Compose.
+  Triggers: "deploy LibreSeal", "self-host LibreSeal with Docker", "install LibreSeal in my homelab",
+  "LibreSeal Docker Compose setup", "back up LibreSeal", "upgrade LibreSeal",
+  "get a Let's Encrypt certificate for LibreSeal".
 ---
 
-# Deploy Phase Console with Docker Compose
+# Deploy LibreSeal with Docker Compose
 
-This skill deploys Phase Console using Docker Compose and sets up valid Let's Encrypt TLS certificates. The default Phase Docker Compose setup ships with a self-signed certificate — this skill upgrades it to a trusted Let's Encrypt certificate as part of the deployment.
+This skill installs LibreSeal from its source repository (`https://github.com/Dos2Locos/libreseal`) using the repository's own scripts, verifies it, and optionally replaces the bundled self-signed certificate with a Let's Encrypt one. Images are built locally; nothing is pulled from Phase.
 
-The agent writes config files and runs docker/certbot commands directly. The user only handles values that require their own secrets or credentials.
+The agent runs commands directly. The user handles anything that involves their credentials, passwords or recovery phrase.
 
 ## Important Principles
 
-- **Autopilot by default.** Write files and run commands without asking for permission at each step. Preview generated files once before writing, then proceed.
-- **Never handle secrets directly.** Write `.env` configuration as a shell script (`configure-env.sh`) that auto-generates cryptographic secrets with `openssl rand -hex 32` and marks OAuth credentials with `# EDIT_ME`. Tell the user to fill those in and run the script. Never ask the user to type secret values into the chat.
-- **License key is not a secret.** If the user has a Phase Enterprise license key, ask them to paste it directly into the chat.
-- **Preserve nginx routing.** All modifications to `nginx/default.conf` must keep the existing routing intact: `/service/` proxies to `backend:8000`, `/` proxies to `frontend:3000`.
-- **Reference files for details.** See `refs/docker-compose-deployment.md` for exact file templates and commands, and `refs/troubleshooting.md` for diagnosing issues.
+- **Never handle secrets.** `scripts/libreseal-init.sh` generates every secret into `.env` (mode 600) without printing it. Never `cat`, `grep`, print or copy `.env`, backups or tokens. If OAuth/OIDC credentials are needed, tell the user which variable names to fill in `.env` themselves.
+- **Never overwrite an existing installation.** If `.env` or running `libreseal-*` containers exist, treat it as an existing deployment: do not rerun init, do not run `docker compose down -v`.
+- **Homelab first.** A LAN hostname with the bundled self-signed certificate is a valid end state. Let's Encrypt is optional and needs a public domain.
+- **Preserve nginx routing.** Any change to `nginx/default.conf` must keep `/service/` → `backend:8000` and `/` → `frontend:3000`.
+- **Reference files for details.** `refs/docker-compose-deployment.md` has templates and commands; `refs/troubleshooting.md` covers failures.
 
 ## Workflow
 
-### Phase 1 — Prerequisites
+### Phase 1 — Prerequisites (run without asking)
 
-Run these checks automatically without asking:
+1. `docker --version` and `docker compose version` — if missing, point the user to https://docs.docker.com/engine/install/ and stop.
+2. `git --version` and `openssl version` — required by the setup script.
+3. Check for an existing deployment: `docker ps --filter name=libreseal- --format '{{.Names}}'`. If containers exist, skip to Phase 5 (verification) or the task the user asked for.
+4. Check that the chosen host ports are free, e.g. `ss -ltn` (Linux) or `lsof -nP -iTCP -sTCP:LISTEN` (macOS). Default ports are 80 and 443; pick others (e.g. 8080/8443) if busy.
 
-1. `which docker` — if missing, tell the user to install Docker from https://docs.docker.com/engine/install/ and stop
-2. `docker compose version` — if missing or fails, tell the user to install the Docker Compose plugin and stop
-3. Check if Phase is already running:
-   ```bash
-   docker compose ps 2>/dev/null
-   ```
-   If Phase containers are already up (`phase-nginx`, `phase-frontend`, `phase-backend` etc.), this is an **existing installation** — skip Phase 2 (fresh install) and go straight to Phase 3 (Let's Encrypt setup).
+### Phase 2 — Questions (single message)
 
-Once checks pass, proceed without waiting for the user.
+1. **Hostname** users will type (LAN name such as `secrets.lan`, an IP, or a public domain). No scheme, no port.
+2. **Ports** — HTTPS (default 443) and HTTP (default 80).
+3. **Sign-in** — password sign-in is enabled by default. Optional instance-wide providers: `google`, `github`, `gitlab`, `authentik`, `authelia`. (Organisation-level Entra ID/Okta SSO, SCIM, dynamic secrets, rotation and log streams are not available in LibreSeal.)
+4. **Public domain with Let's Encrypt?** Only if the hostname is a public DNS name reachable on port 80.
 
-### Phase 2 — Configuration Questions (fresh install only)
-
-Ask all questions in a single message:
-
-1. **Domain name** — The FQDN where Phase will run (e.g., `phase.example.com`). Required — must be a real domain pointing to this server for Let's Encrypt to work.
-2. **Email address** — For Let's Encrypt certificate expiry notifications and the `.env` contact address.
-3. **SSO provider(s)** — Which identity providers to enable (comma-separated):
-   - `google`, `github`, `gitlab`, `authentik`
-   - `google-oidc`, `jumpcloud-oidc`, `entra-id-oidc`, `okta-oidc`
-   - `github-enterprise`
-4. **Phase Enterprise license** — Do they have a license key? If yes, ask them to paste it here.
-
-Once answered, proceed to Phase 3.
-
-### Phase 3 — Let's Encrypt Setup Questions
-
-Ask only what's needed (some may already be known from Phase 2):
-
-1. **Domain** — if not already collected
-2. **Email for Let's Encrypt** — if not already collected
-3. **Working directory** — where is the `docker-compose.yml` located? Default: current directory. The agent needs this to run `docker compose` commands with the right context.
-
-### Phase 4 — File Setup (fresh install only)
-
-#### 4a. Download base configs
-
-Run automatically:
+### Phase 3 — Install
 
 ```bash
-curl -o docker-compose.yml https://raw.githubusercontent.com/phasehq/console/main/docker-compose.yml
-curl -o .env.example https://raw.githubusercontent.com/phasehq/console/main/.env.example
-mkdir -p nginx
-curl -o nginx/default.conf https://raw.githubusercontent.com/phasehq/console/main/nginx/default.conf
-curl -o nginx/Dockerfile https://raw.githubusercontent.com/phasehq/console/main/nginx/Dockerfile
+git clone https://github.com/Dos2Locos/libreseal.git
+cd libreseal
+# Optional: pin a verified commit or tag from the README "Verified combination" table
+./scripts/libreseal-init.sh --host {HOST} --https-port {HTTPS_PORT} --http-port {HTTP_PORT}
 ```
 
-#### 4b. Write configure-env.sh
-
-Write `configure-env.sh` — a script the user edits and runs to produce a valid `.env`. Auto-generate all cryptographic secrets. Mark OAuth credentials with `# EDIT_ME`. See references for the full template.
-
-Write the file and `chmod +x configure-env.sh`. Tell the user: "Edit the `# EDIT_ME` lines in `configure-env.sh` then run it to generate your `.env`. Let me know when it's done."
-
-Wait for confirmation before proceeding.
-
-### Phase 5 — Let's Encrypt Certificate Setup
-
-This is the core of the skill and applies to both fresh installs and existing deployments.
-
-#### 5a. Verify DNS
-
-Before doing anything with certificates, verify the domain resolves to this server:
+The script refuses to overwrite an existing `.env`. If providers were requested, tell the user to set in `.env` (themselves, with an editor): `SSO_PROVIDERS=...` and the matching `*_CLIENT_ID` / `*_CLIENT_SECRET` (and `AUTHENTIK_URL`/`AUTHELIA_URL`). Callback URLs are listed in `refs/docker-compose-deployment.md`. Wait for confirmation.
 
 ```bash
-dig @8.8.8.8 {domain} +short
-dig @1.1.1.1 {domain} +short
-dig @9.9.9.9 {domain} +short
-dig @208.67.222.222 {domain} +short
+docker compose up -d --build
 ```
 
-All should return the server's public IP. If any are inconsistent or NXDOMAIN, tell the user to fix DNS first and wait. Do not proceed until at least 3 of 4 resolvers agree — Let's Encrypt will fail ACME challenges on an unresolved domain.
+The first build takes several minutes (frontend build needs ~4 GB RAM).
 
-If the user doesn't know their server's public IP:
-```bash
-curl -s https://api.ipify.org
-```
-
-#### 5b. Patch docker-compose.yml
-
-Add the certbot service and shared volumes to `docker-compose.yml`, and add volume mounts to the nginx service. See references for the exact patch. Run automatically — show a diff-style preview of what's changing before applying.
-
-Key changes:
-- Add `certbot-webroot` and `certbot-certs` named volumes
-- Mount both into the nginx service
-- Add the `certbot` service definition
-
-#### 5c. Patch nginx/default.conf
-
-Replace the nginx config with the Let's Encrypt-ready version from references. This version:
-- **HTTP server block** (port 80): serves ACME challenges at `/.well-known/acme-challenge/`, redirects everything else to HTTPS
-- **HTTPS server block** (port 443): initially still uses the self-signed cert baked into the nginx image (`/etc/nginx/ssl/nginx.crt`); preserves all existing routing (`/service/` → backend, `/` → frontend)
-- Mounts the certbot webroot volume for challenge file serving
-
-Show the full new config as a preview, then write it.
-
-#### 5d. Apply and restart nginx
+### Phase 4 — Verify
 
 ```bash
-docker compose up -d --build nginx
+docker compose ps                     # all services running; backend and postgres healthy
+docker compose ps -a migrations       # exited with code 0
+curl -ksS https://{HOST}:{HTTPS_PORT}/service/health/
+curl -ks -o /dev/null -w '%{http_code}\n' https://{HOST}:{HTTPS_PORT}/login
 ```
 
-The `--build` flag is needed because the nginx Dockerfile generates the self-signed cert at build time. After this, nginx is running with:
-- Port 80: serves ACME challenges + redirects to HTTPS
-- Port 443: still using self-signed cert (temporary)
+Expect `{"status": "alive", ...}` and `200`. Otherwise use `refs/troubleshooting.md`.
 
-#### 5e. Get the Let's Encrypt certificate
+### Phase 5 — First run (user)
 
-Run automatically:
+Tell the user to open `https://{HOST}:{HTTPS_PORT}` (accept the self-signed certificate warning on LAN installs), create the first account and organisation, and store the **recovery phrase** offline. The agent must not see the recovery phrase or password.
+
+### Phase 6 — Backups
 
 ```bash
-docker compose run --rm certbot certonly \
-  --webroot \
-  --webroot-path=/var/www/certbot \
-  --email {email} \
-  --agree-tos \
-  --no-eff-email \
-  -d {domain}
+./scripts/libreseal-backup.sh            # writes ./backups/libreseal-<timestamp>.dump (mode 600)
 ```
 
-If this fails, consult `refs/troubleshooting.md` for ACME challenge errors.
-
-#### 5f. Switch nginx to Let's Encrypt cert
-
-Update the two `ssl_certificate` lines in `nginx/default.conf` to point to the Let's Encrypt cert paths:
-
-```
-ssl_certificate /etc/letsencrypt/live/{domain}/fullchain.pem;
-ssl_certificate_key /etc/letsencrypt/live/{domain}/privkey.pem;
-```
-
-Then reload nginx (no restart needed — reload picks up the new cert without dropping connections):
+Explain that restoring needs the dump **and** the same `.env`, and that both must be stored securely and separately. Restore with `./scripts/libreseal-restore.sh --yes <file>` (replaces all data — only on explicit user request). Offer a daily cron entry:
 
 ```bash
-docker compose exec nginx nginx -s reload
+(crontab -l 2>/dev/null; echo "30 3 * * * cd {WORKING_DIR} && ./scripts/libreseal-backup.sh >/dev/null") | crontab -
 ```
 
-#### 5g. Verify
+### Phase 7 — Let's Encrypt (optional, public domains only)
+
+Follow `refs/docker-compose-deployment.md` → "Let's Encrypt": verify DNS, add the certbot service, switch nginx to the issued certificate, reload nginx and install the renewal cron job.
+
+### Phase 8 — Hand-off to applications and agents
+
+Do not use the user's own account for automation. Ask the user to create, in the UI (Access → Service Accounts), a service account restricted to the apps/environments needed and generate a token. Continue with the `libreseal-usage` skill for CLI setup and safe usage.
+
+## Upgrading LibreSeal
 
 ```bash
-curl -sv https://{domain}/api/health 2>&1 | grep -E "SSL|issuer|subject|expire"
+./scripts/libreseal-backup.sh
+git pull                 # or check out a newer verified tag
+docker compose up -d --build
 ```
 
-Confirm the issuer is `Let's Encrypt` and the cert is valid.
-
-#### 5h. Set up auto-renewal
-
-Write a cron job that renews the cert twice daily (Let's Encrypt certs expire in 90 days; certbot only actually renews when within 30 days):
-
-```bash
-(crontab -l 2>/dev/null; echo "0 0,12 * * * cd {working_dir} && docker compose run --rm certbot renew --quiet && docker compose exec nginx nginx -s reload") | crontab -
-```
-
-Show the user the installed cron entry:
-```bash
-crontab -l
-```
-
-Tell the user: "Your Phase Console is live at `https://{domain}` with a trusted Let's Encrypt certificate. It will auto-renew every 12 hours when within 30 days of expiry."
-
-### Phase 6 — Verification
-
-Run automatically:
-
-```bash
-docker compose ps
-```
-
-All containers should show `running`. Check health endpoints:
-
-```bash
-curl -s https://{domain}/api/health
-curl -s https://{domain}/service/health/
-```
-
-Both should return a 200 response. If any container is unhealthy, consult `refs/troubleshooting.md`.
-
-## Upgrading Phase
-
-```bash
-docker compose pull
-docker compose up -d
-```
+Migrations run automatically (`migrations` service).
 
 ## Uninstalling
 
 ```bash
-docker compose down -v   # -v removes volumes including the database
-```
-
-Remove certbot cron job:
-```bash
-crontab -l | grep -v certbot | crontab -
+docker compose down        # keeps data in the libreseal-postgres-data volume
+docker compose down -v     # DESTROYS all data — only on explicit request, after a backup
 ```

@@ -1,42 +1,49 @@
-# Phase AI Skills
+# LibreSeal Skills
 
-AI skills for deploying and managing [Phase](https://phase.dev) — the open-source secrets manager.
+Agent skills for deploying and using [LibreSeal](https://github.com/Dos2Locos/libreseal), a free, self-hosted secrets manager.
 
-Install deployment skills into your AI coding agent (Claude Code, Cursor, Windsurf, GitHub Copilot) with a single command via the [skills](https://skills.sh/) ecosystem.
+> LibreSeal is an independent fork of Phase; this repository is a fork of [phasehq/ai](https://github.com/phasehq/ai). It is not affiliated with or endorsed by Phase.
 
-## Usage
+## Skills
+
+| Skill | Status | Purpose | Trigger phrase |
+|-------|--------|---------|----------------|
+| `docker-compose` | Supported | Deploy LibreSeal from source with Docker Compose (homelab first, optional Let's Encrypt), back up and upgrade it | "deploy LibreSeal with Docker Compose" |
+| `libreseal-usage` | Supported | Use a LibreSeal server safely from an agent with the `libreseal` CLI and a least-privilege service account | "run my app with LibreSeal secrets" |
+| `k8s`, `eks`, `aks` | **Not adapted** | Upstream Phase Helm/cloud guides, kept for reference. They deploy Phase images and charts, not LibreSeal | — |
+
+## Install
+
+With the [skills](https://skills.sh/) CLI:
 
 ```bash
-# Install all skills
-npx skills add phasehq/ai
-
-# Install a specific skill
-npx skills add phasehq/ai -s docker-compose
+npx skills add Dos2Locos/libreseal-skills -s docker-compose
+npx skills add Dos2Locos/libreseal-skills -s libreseal-usage
 ```
 
-Then ask your AI agent: **"deploy Phase with Docker Compose"**
+Or copy a skill directory manually, e.g. for Claude Code:
 
-## Available Skills
+```bash
+git clone https://github.com/Dos2Locos/libreseal-skills.git
+mkdir -p ~/.claude/skills
+cp -R libreseal-skills/docker-compose ~/.claude/skills/libreseal-docker-compose
+cp -R libreseal-skills/libreseal-usage ~/.claude/skills/libreseal-usage
+```
 
-| Skill | Description | Trigger Phrase |
-|-------|-------------|----------------|
-| `docker-compose` | Deploy Phase Console with Docker Compose and Let's Encrypt TLS | "deploy Phase with Docker Compose" |
-| `k8s` | Deploy Phase Console on any Kubernetes cluster via Helm | "deploy Phase on Kubernetes" |
-| `eks` | Deploy Phase Console on AWS EKS with Helm and native AWS services | "deploy Phase on EKS" |
-| `aks` | Deploy Phase Console on Azure AKS with Azure-native services and optional Tailscale networking | "deploy Phase on AKS" |
+The version-matched CLI guide is embedded in the CLI itself: a human runs `libreseal ai enable` to install it for the agent, or `libreseal ai skill` to print it.
 
-## How it works
+## Safety model
 
-Skills are markdown files that teach AI coding agents how to deploy Phase step-by-step. The [`skills`](https://skills.sh/) CLI installs them into your agent's skills directory (e.g. `.claude/skills/`). Your AI agent reads these files and uses them to automate the deployment interactively.
+- Agents get credentials only through `LIBRESEAL_HOST` / `LIBRESEAL_SERVICE_TOKEN` set by the user, from a service account restricted to the apps and environments they need — never an admin or personal token.
+- Secrets are injected into processes with `libreseal run`; skills forbid printing them, putting them in prompts or writing them to version-controlled files.
+- The CLI's agent detection (blocking `printenv` and friends) is defence in depth, not a security boundary.
 
-Each skill includes:
-- **SKILL.md** — The main instruction file with workflow phases and principles
-- **refs/** — Reference files with exact templates, commands, and troubleshooting guides
+`libreseal-usage/examples/agent-demo.sh` demonstrates the flow end to end and checks that access outside the token scope is denied.
 
-## Documentation
+## Verified combination
 
-Full deployment guides: [docs.phase.dev/self-hosting](https://docs.phase.dev/self-hosting)
+See the [LibreSeal README](https://github.com/Dos2Locos/libreseal#compatibility-and-limitations) for the server, CLI and skills commits verified together.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Original skills © Phase; LibreSeal changes released under the same license.

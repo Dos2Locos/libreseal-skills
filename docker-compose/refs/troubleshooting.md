@@ -1,14 +1,14 @@
 # Troubleshooting Guide
 
-Common issues when deploying Phase Console with Docker Compose, with a focus on Let's Encrypt certificate setup.
+Common issues when deploying LibreSeal with Docker Compose, with a focus on Let's Encrypt certificate setup.
 
 ## ACME Challenge Fails (certbot can't get certificate)
 
 **Symptom:** `docker compose run --rm certbot certonly ...` fails with an error like:
 
 ```
-Challenge failed for domain phase.example.com
-http-01 challenge for phase.example.com
+Challenge failed for domain secrets.example.com
+http-01 challenge for secrets.example.com
 Cleaning up challenges
 Some challenges have failed.
 ```
@@ -130,9 +130,9 @@ Reinstall the cron job:
 (crontab -l 2>/dev/null | grep -v certbot; echo "0 0,12 * * * cd {working_dir} && docker compose run --rm certbot renew --quiet && docker compose exec nginx nginx -s reload") | crontab -
 ```
 
-## Phase Container CrashLooping
+## LibreSeal Container CrashLooping
 
-**Symptom:** `docker compose ps` shows a Phase container restarting repeatedly.
+**Symptom:** `docker compose ps` shows a LibreSeal container restarting repeatedly.
 
 **Diagnosis:**
 
@@ -147,14 +147,14 @@ docker compose logs migrations
 
 - **Missing or invalid `.env`** — `HOST`, `NEXTAUTH_SECRET`, `SECRET_KEY`, `SERVER_SECRET`, `DATABASE_PASSWORD` must all be set.
 - **Database migration failure** — Check `docker compose logs migrations`. Often caused by a wrong `DATABASE_PASSWORD` or Postgres not yet healthy.
-- **Invalid `HOST` value** — Must be just the domain (`phase.example.com`), not `https://phase.example.com`.
-- **Invalid `HTTP_PROTOCOL`** — Must be `https://` (with trailing slash).
+- **Invalid `HOST` value** — Must be just the domain (`secrets.example.com`), not `https://secrets.example.com`.
+- **Invalid `PUBLIC_URL`** — Must be `https://HOST` or `https://HOST:HTTPS_PORT`, matching `HOST` and `HTTPS_PORT`.
 
 ## 502 Bad Gateway
 
 **Symptom:** nginx returns 502 Bad Gateway.
 
-**Cause:** The upstream service (frontend or backend) is not ready yet.
+**Cause:** The upstream service (frontend or backend) is not ready yet. On LibreSeal versions whose `nginx/default.conf` has no `resolver 127.0.0.11` line, nginx also keeps proxying to a stale container IP after the backend or frontend is recreated (e.g. after `docker compose up -d --build`); `docker compose restart nginx` fixes it, and current versions resolve upstreams at request time.
 
 **Diagnosis:**
 
@@ -164,7 +164,7 @@ docker compose logs backend
 docker compose logs frontend
 ```
 
-**Fix:** Wait for migrations to complete — the backend only starts after `phase-migrations` exits successfully. Check:
+**Fix:** Wait for migrations to complete — the backend only starts after `libreseal-migrations` exits successfully. Check:
 
 ```bash
 docker compose logs migrations
@@ -202,9 +202,9 @@ docker compose run --rm certbot delete --cert-name {DOMAIN}
 # Then re-run without --staging
 ```
 
-## Can't Connect to Phase After DNS Change
+## Can't Connect to LibreSeal After DNS Change
 
-**Symptom:** Phase was working, then DNS was changed (e.g., moving to Cloudflare), and now it fails.
+**Symptom:** LibreSeal was working, then DNS was changed (e.g., moving to Cloudflare), and now it fails.
 
 **Cause:** If Cloudflare proxy (orange cloud) is enabled but SSL mode isn't set to `Full (strict)`, Cloudflare will try to connect to the origin over plain HTTP and get rejected.
 
@@ -230,3 +230,64 @@ docker volume prune
 ```
 
 Be careful — `docker volume prune` removes ALL unused volumes, not just certbot's. Only run if you're sure no important data is in unnamed volumes.
+
+## Port Already in Use
+
+**Symptom:** `docker compose up` fails with `bind: address already in use` for port 80 or 443.
+
+**Fix:** Another service owns the port. Pick free ports and update `.env` (`HTTP_PORT`, `HTTPS_PORT` and the port in `PUBLIC_URL`), then `docker compose up -d`. For a fresh install pass `--http-port`/`--https-port` to `scripts/libreseal-init.sh`.
+
+## CLI Fails with a Certificate Error on a LAN Install
+
+**Symptom:** `libreseal` reports an SSL error against the bundled self-signed certificate.
+
+**Fix:** Prefer a trusted certificate (Let's Encrypt or your own CA mounted into nginx). For local testing only, `export LIBRESEAL_VERIFY_SSL=False`.
+
+## Access Denied: Network Access Policies
+
+**Symptom:** API calls return 403 "Access denied: a network access policy restricts access from your IP address", or the UI/GraphQL reports "Your IP address is not allowed to access {ORG}". Token issuance through AWS IAM / Azure Entra identities returns the same 403.
+
+**Cause:** A network access policy (Access Control → Network) applies to the account — its own or an organisation-global one — and the client IP is not in any of its IPs/CIDRs. Common reasons:
+
+- The client really is outside the allowed ranges (VPN off, new public IP).
+- **Another reverse proxy sits in front of the bundled nginx** (Traefik, Caddy, Cloudflare Tunnel…), so every request appears to come from that proxy.
+- The backend is reached without the bundled nginx and `TRUSTED_PROXY_CIDRS` does not include the proxy that sets `X-Real-IP`/`X-Forwarded-For`.
+
+**Diagnosis:** the bundled nginx logs the client IP it resolved as the first field of each access-log line:
+
+```bash
+docker compose logs --tail 20 nginx
+```
+
+**Fix:**
+
+- Outer proxy: set in `.env` the proxy addresses and header, then `docker compose up -d nginx`:
+  ```bash
+  NGINX_REAL_IP_FROM=172.18.0.10            # your proxy IPs/CIDRs, comma-separated (never 0.0.0.0/0)
+  NGINX_REAL_IP_HEADER=X-Forwarded-For      # Cloudflare: CF-Connecting-IP
+  ```
+- Outside the bundled Compose setup, set `TRUSTED_PROXY_CIDRS` to the address of the proxy in front of the backend.
+- Wrong policy or locked out (operator, on the host):
+  ```bash
+  docker compose exec backend python manage.py libreseal_clear_network_policies                          # list
+  docker compose exec backend python manage.py libreseal_clear_network_policies --organisation {ORG} --yes # delete
+  ```
+  Deletions are recorded in the organisation's audit log.
+
+Servers from before network policies were enforced report "network access policies apply to this account but LibreSeal cannot enforce them"; the same command clears them.
+
+## Dynamic or Rotating Secrets Migrated from Phase
+
+**Symptom:** `libreseal run`/`secrets export` fails with "HTTP 501: The dynamic secrets feature is not available in LibreSeal…", or deleting an app, environment or folder is refused because it "contains dynamic or rotating secrets with live provider credentials migrated from Phase".
+
+**Cause:** The database came from Phase with dynamic or rotating secrets. LibreSeal cannot serve them nor revoke their credentials at the provider, so it fails explicitly instead of dropping them silently.
+
+**Fix (operator):**
+
+```bash
+docker compose exec backend python manage.py libreseal_remove_legacy_credentials              # list
+docker compose exec backend python manage.py libreseal_remove_legacy_credentials --yes        # remove those without live credentials
+# After revoking the remaining credentials at the provider (AWS, database…):
+docker compose exec backend python manage.py libreseal_remove_legacy_credentials --yes --credentials-revoked
+```
+

@@ -5,6 +5,9 @@ description: Interview a customer, plan, deploy, and operate Phase Console on Mi
 
 # Deploy Phase on Azure AKS
 
+> **Not adapted to LibreSeal.** This is the upstream Phase guide, kept for reference. It deploys Phase images and Helm charts, not LibreSeal. Use the `docker-compose` skill instead.
+
+
 Act as a Phase forward-deployed engineer. Take the deployment from discovery to a tested handoff while letting the user choose the security, availability, networking, and data topology.
 
 ## Operating rules
