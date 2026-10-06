@@ -189,6 +189,7 @@ docker compose run --rm certbot certonly --webroot --webroot-path=/var/www/certb
 ### 5. Switch nginx to the certificate
 
 ```nginx
+    # fragment: replace these lines in the 443 server block
     ssl_certificate /etc/letsencrypt/live/{DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{DOMAIN}/privkey.pem;
 ```

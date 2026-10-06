@@ -40,6 +40,16 @@ The version-matched CLI guide is embedded in the CLI itself: a human runs `libre
 
 `libreseal-usage/examples/agent-demo.sh` demonstrates the flow end to end and checks that access outside the token scope is denied.
 
+## Contributing and CI
+
+Every pull request to `main` runs `scripts/validate-skills.sh` in GitHub Actions (job `validate`), and `main` only accepts pull requests with that check green. Run it locally before opening a PR (needs git, python3, openssl, docker; shellcheck optional):
+
+```bash
+scripts/validate-skills.sh
+```
+
+It checks that each `SKILL.md` has front matter with `name` equal to its directory and a description, that shell scripts pass shellcheck, that every `nginx` block in the docs passes `nginx -t` (mark partial blocks with a first line starting `# fragment`), and that no `.env` files or LibreSeal/Phase tokens are committed. It does not contact any LibreSeal server.
+
 ## Verified combination
 
 See the [LibreSeal README](https://github.com/Dos2Locos/libreseal#compatibility-and-limitations) for the server, CLI and skills commits verified together.

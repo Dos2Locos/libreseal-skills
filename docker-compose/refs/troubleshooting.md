@@ -47,6 +47,7 @@ docker compose logs nginx
 - Open port 80 in firewall: `ufw allow 80/tcp` or equivalent
 - Verify `nginx/default.conf` has the ACME challenge location in the HTTP server block:
   ```nginx
+  # fragment: inside the port 80 server block
   location /.well-known/acme-challenge/ {
       root /var/www/certbot;
   }
