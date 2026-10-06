@@ -1,5 +1,5 @@
 ---
-name: docker-compose
+name: compose
 description: |
   Deploy LibreSeal (self-hosted secrets manager, independent fork of Phase Console) with Docker Compose.
   Triggers: "deploy LibreSeal", "self-host LibreSeal with Docker", "install LibreSeal in my homelab",
