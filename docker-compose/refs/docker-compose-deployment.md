@@ -1,6 +1,6 @@
 # Docker Compose Deployment Reference (LibreSeal)
 
-Reference for deploying LibreSeal from `https://github.com/Dos2Locos/libreseal` with Docker Compose, plus optional Let's Encrypt TLS.
+Reference for deploying LibreSeal from `https://github.com/Dos2Locos/libreseal` with Docker Compose, plus optional Let's Encrypt TLS. `docker-compose.yml` runs the published images `ghcr.io/dos2locos/libreseal-{backend,frontend,nginx}`, pinned to the release you checked out (override with `LIBRESEAL_VERSION` in `.env`); `docker-compose.build.yml` builds them from source instead.
 
 ## Architecture
 
@@ -209,9 +209,11 @@ echo | openssl s_client -connect {DOMAIN}:443 -servername {DOMAIN} 2>/dev/null |
 
 ```bash
 ./scripts/libreseal-backup.sh
-git pull
-docker compose up -d --build
+git fetch --tags && git checkout v{NEW_VERSION}
+docker compose pull && docker compose up -d
 ```
+
+Source builds: `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` instead of the last line.
 
 ## Cloudflare
 

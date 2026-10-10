@@ -56,7 +56,7 @@ docker compose logs nginx
 
 ## nginx Won't Start After Config Change
 
-**Symptom:** `docker compose up -d --build nginx` fails or nginx exits immediately.
+**Symptom:** `docker compose up -d nginx` fails or nginx exits immediately.
 
 **Diagnosis:**
 
@@ -70,6 +70,23 @@ docker compose exec nginx nginx -t
 - **Syntax error in nginx config** — Check for missing semicolons, braces, or typos. Run `nginx -t` to see the exact line.
 - **SSL cert file not found** — If the config references Let's Encrypt paths (`/etc/letsencrypt/live/...`) but certbot hasn't run yet, nginx will fail to start. Make sure the config still points to the self-signed cert (`/etc/nginx/ssl/nginx.crt`) until after certbot succeeds.
 - **Port already in use** — Something else is running on port 80 or 443. Check: `ss -tlnp | grep -E ':80|:443'`
+
+## Image Pull Fails (`manifest unknown` or `denied`)
+
+**Symptom:** `docker compose up -d` or `docker compose pull` fails for `ghcr.io/dos2locos/libreseal-*`.
+
+**Diagnosis:**
+
+```bash
+docker compose config --images
+git describe --tags
+```
+
+**Common causes:**
+
+- **Checkout is not a release** — `main` (or an unreleased commit) can reference a version that is not published yet. Check out a release tag: `git fetch --tags && git checkout v{VERSION}`.
+- **`LIBRESEAL_VERSION` in `.env`** pins a version that does not exist. Fix or remove that line.
+- **No access to ghcr.io** — check outbound HTTPS from the host, or build from source with `-f docker-compose.yml -f docker-compose.build.yml up -d --build`.
 
 ## nginx Starts but Returns Self-Signed Cert After Switching
 
