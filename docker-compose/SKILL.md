@@ -9,7 +9,7 @@ description: |
 
 # Deploy LibreSeal with Docker Compose
 
-This skill installs LibreSeal from its source repository (`https://github.com/Dos2Locos/libreseal`) using the repository's own scripts, verifies it, and optionally replaces the bundled self-signed certificate with a Let's Encrypt one. Images are built locally; nothing is pulled from Phase.
+This skill installs a LibreSeal release from its repository (`https://github.com/Dos2Locos/libreseal`) using the repository's own scripts, verifies it, and optionally replaces the bundled self-signed certificate with a Let's Encrypt one. By default it runs the signed images published by LibreSeal (`ghcr.io/dos2locos/libreseal-*`), pinned to the release; building them from source is an alternative. Nothing is pulled from Phase.
 
 The agent runs commands directly. The user handles anything that involves their credentials, passwords or recovery phrase.
 
@@ -26,7 +26,7 @@ The agent runs commands directly. The user handles anything that involves their 
 ### Phase 1 — Prerequisites (run without asking)
 
 1. `docker --version` and `docker compose version` — if missing, point the user to https://docs.docker.com/engine/install/ and stop.
-2. `git --version` and `openssl version` — required by the setup script.
+2. `git --version` and `openssl version` — required to fetch the release and by the setup script.
 3. Check for an existing deployment: `docker ps --filter name=libreseal- --format '{{.Names}}'`. If containers exist, skip to Phase 5 (verification) or the task the user asked for.
 4. Check that the chosen host ports are free, e.g. `ss -ltn` (Linux) or `lsof -nP -iTCP -sTCP:LISTEN` (macOS). Default ports are 80 and 443; pick others (e.g. 8080/8443) if busy.
 
@@ -39,20 +39,27 @@ The agent runs commands directly. The user handles anything that involves their 
 
 ### Phase 3 — Install
 
+Use the latest release `{VERSION}` (`X.Y.Z`) listed at https://github.com/Dos2Locos/libreseal/releases. Always install a release tag (or its `libreseal-deploy-{VERSION}.tar.gz` bundle, which contains the same files), never `main`: right after a version bump `main` can point at images that are not published yet.
+
 ```bash
-git clone https://github.com/Dos2Locos/libreseal.git
+git clone --branch v{VERSION} https://github.com/Dos2Locos/libreseal.git
 cd libreseal
-# Optional: pin a verified commit or tag from the README "Verified combination" table
 ./scripts/libreseal-init.sh --host {HOST} --https-port {HTTPS_PORT} --http-port {HTTP_PORT}
 ```
 
 The script refuses to overwrite an existing `.env`. If providers were requested, tell the user to set in `.env` (themselves, with an editor): `SSO_PROVIDERS=...` and the matching `*_CLIENT_ID` / `*_CLIENT_SECRET` (and `AUTHENTIK_URL`/`AUTHELIA_URL`). Callback URLs are listed in `refs/docker-compose-deployment.md`. Wait for confirmation.
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
-The first build takes several minutes (frontend build needs ~4 GB RAM).
+This pulls `ghcr.io/dos2locos/libreseal-{backend,frontend,nginx}:{VERSION}`; nothing is compiled. If `cosign` is installed, verify the images first (commands in the libreseal README, "Verify the images"). If the user wants to build from source instead (needs ~4 GB RAM and several minutes for the frontend):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+In that case keep using both `-f` files for every later `docker compose` command.
 
 ### Phase 4 — Verify
 
@@ -93,11 +100,11 @@ Do not use the user's own account for automation. Ask the user to create, in the
 
 ```bash
 ./scripts/libreseal-backup.sh
-git pull                 # or check out a newer verified tag
-docker compose up -d --build
+git fetch --tags && git checkout v{NEW_VERSION}
+docker compose pull && docker compose up -d
 ```
 
-Migrations run automatically (`migrations` service).
+Migrations run automatically (`migrations` service). Installations built from source before images were published (they were started with `docker compose up -d --build`) migrate the same way: `.env`, container names and the data volume are unchanged. Afterwards the old local images can be removed with `docker image rm libreseal/backend:local libreseal/frontend:local libreseal/nginx:local`.
 
 ## Uninstalling
 
