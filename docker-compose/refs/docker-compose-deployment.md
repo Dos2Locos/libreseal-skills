@@ -9,8 +9,8 @@ Clients (browser, libreseal CLI, apps)
     │
     ▼
  nginx :HTTP_PORT/:HTTPS_PORT            (libreseal-nginx)
-    ├── /service/ → backend:8000 (Django API, libreseal-backend)
-    └── /         → frontend:3000 (Next.js, libreseal-frontend)
+    ├── /service/ → libreseal-backend:8000  (Django API)
+    └── /         → libreseal-frontend:3000 (Next.js)
          │
     ┌────┴─────┐
  Postgres    Redis        (+ worker, + one-shot migrations)
@@ -127,10 +127,11 @@ server {
     http2 on;
     server_tokens off;
 
-    # Resolve upstreams at request time (survives recreated containers).
+    # Resolve upstreams at request time (survives recreated containers), by
+    # their unique aliases: generic names can hit other projects on shared networks.
     resolver 127.0.0.11 valid=10s ipv6=off;
-    set $backend_upstream http://backend:8000;
-    set $frontend_upstream http://frontend:3000;
+    set $backend_upstream http://libreseal-backend:8000;
+    set $frontend_upstream http://libreseal-frontend:3000;
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers EECDH+AESGCM:EECDH+CHACHA20;

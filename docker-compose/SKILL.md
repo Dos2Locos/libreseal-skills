@@ -18,7 +18,7 @@ The agent runs commands directly. The user handles anything that involves their 
 - **Never handle secrets.** `scripts/libreseal-init.sh` generates every secret into `.env` (mode 600) without printing it. Never `cat`, `grep`, print or copy `.env`, backups or tokens. If OAuth/OIDC credentials are needed, tell the user which variable names to fill in `.env` themselves.
 - **Never overwrite an existing installation.** If `.env` or running `libreseal-*` containers exist, treat it as an existing deployment: do not rerun init, do not run `docker compose down -v`.
 - **Homelab first.** A LAN hostname with the bundled self-signed certificate is a valid end state. Let's Encrypt is optional and needs a public domain.
-- **Preserve nginx routing.** Any change to `nginx/default.conf` must keep `/service/` → `backend:8000` and `/` → `frontend:3000`.
+- **Preserve nginx routing.** Any change to `nginx/default.conf` must keep `/service/` → `libreseal-backend:8000` and `/` → `libreseal-frontend:3000`. Never use the generic `backend`/`frontend` names: if nginx is also attached to a shared network (e.g. a PaaS proxy network), they can resolve to other projects' containers.
 - **Reference files for details.** `refs/docker-compose-deployment.md` has templates and commands; `refs/troubleshooting.md` covers failures.
 
 ## Workflow
