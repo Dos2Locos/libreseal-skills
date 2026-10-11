@@ -168,6 +168,26 @@ docker compose logs migrations
 - **Invalid `HOST` value** — Must be just the domain (`secrets.example.com`), not `https://secrets.example.com`.
 - **Invalid `PUBLIC_URL`** — Must be `https://HOST` or `https://HOST:HTTPS_PORT`, matching `HOST` and `HTTPS_PORT`.
 
+## Requests Reach Another Project (400, Wrong Pages) on a Shared Network
+
+**Symptom:** behind a PaaS proxy (Dokploy, Coolify, a shared Traefik network…) `/service/health/` returns `Bad Request (400)` or pages that are not LibreSeal, although the containers are healthy.
+
+**Cause:** nginx is attached to a shared network where other projects also have services called `backend` or `frontend`, and its `nginx/default.conf` still uses those generic names (LibreSeal before v0.1.1, or a customised copy).
+
+**Fix:** update to the current `nginx/default.conf` (or the release bundle), or edit the two upstream lines of your customised file and recreate nginx:
+
+```nginx
+# fragment: inside the server block
+set $backend_upstream http://libreseal-backend:8000;
+set $frontend_upstream http://libreseal-frontend:3000;
+```
+
+```bash
+docker compose up -d --force-recreate nginx
+```
+
+The aliases come from `docker-compose.yml` (v0.1.1 or later). On older compose files use the container names `libreseal-backend` / `libreseal-frontend`, which resolve the same way. Where the platform offers it, an isolated deployment (own network for the proxy) is a good additional safeguard.
+
 ## 502 Bad Gateway
 
 **Symptom:** nginx returns 502 Bad Gateway.
